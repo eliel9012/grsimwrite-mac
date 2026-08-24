@@ -1,89 +1,103 @@
 # grsimwrite-mac
 
-Port macOS nativo (Python) do GRSIMWrite 4.4.10 — gravação de SIM GSM/USIM via
-PC/SC, com suporte às **42 famílias** de cartão do tool original. Sem Windows.
+[🇧🇷 Português](README.md) · [🇺🇸 English](README.en.md)
+
+Port macOS nativo (Python) do **GRSIMWrite 4.4.10** — ferramenta Windows de
+gravação de SIM GSM/USIM via PC/SC — com suporte às **42 famílias de cartão**
+do tool original, reconstruídas por engenharia reversa. Sem Windows, sem VM.
 
 ## Instalação
 
 ```bash
-pip install -r requirements.txt   # pyscard, pydes
+git clone https://github.com/eliel9012/grsimwrite-mac.git
+cd grsimwrite-mac
+pip3 install -r requirements.txt   # pyscard, pydes
 ```
 
-## Uso
+## Uso (CLI)
 
 ```bash
-python3 -m simwriter identify                 # leitor + ATR
-python3 -m simwriter read                     # lê todos os EFs
-python3 -m simwriter read --ef ICCID IMSI    # EFs específicos
+python3 -m simwriter identify                        # leitor + ATR
+python3 -m simwriter read                            # lê todos os EFs
+python3 -m simwriter read --ef ICCID IMSI           # EFs específicos
 python3 -m simwriter write --iccid 898821... --imsi 001010123456789
 ```
 
-### API Python
+## Uso (API Python)
 
 ```python
 from simwriter.session import CardSession
-from simwriter.families import load_profiles, detect_family
+from simwriter.families import detect_family, load_profiles
 from simwriter.dispatch import write_card
 from simwriter.format import FormatEngine
 from simwriter.keyengine import KeyEngine
 
-s = CardSession()                     # T=0 forçado (quirk macOS)
-atr = s.get_atr()
+s = CardSession()                          # força T=0 (quirk macOS)
+profile = detect_family(s.get_atr())       # ATR → 1 de 42 famílias
 
-profile = detect_family(atr)          # ATR → 1 das 42 famílias (ou índice manual)
+# personalização completa com verificação read-back
 report = write_card(s, profile, {
     "iccid": "89882100000000000012",
     "imsi":  "001010123456789",
-    "ki":    "0123456789ABCDEF0123456789ABCDEF",
-    "opc":   "FEDCBA9876543210FEDCBA9876543210",
-})                                    # auth → writes → verificação read-back
+    "ki":    "0123456789ABCDEF0123456789ABCDEF",   # use SUA Ki
+    "opc":   "FEDCBA9876543210FEDCBA9876543210",   # use SEU OPc
+})
 
+# formatação de cartão virgem (recria o filesystem inteiro)
 fe = FormatEngine.from_catalog("research/format_templates.json")
-seq = fe.build_format_sequence("family_1197c0")   # formata cartão virgem (321 steps p/ LY14)
+seq = fe.build_format_sequence("family_1197c0")    # LY14: 321 passos
 
+# construção exata dos APDUs de chave conforme o tool original
 ke = KeyEngine()
-apdu = ke.build_ki_write("LY14", ki_hex)          # select+D6 exatos conforme RE do tool
+apdu = ke.build_ki_write("LY14", ki_hex)
 ```
 
-## Arquitetura (fases)
+## Arquitetura
 
-| Fase | Módulo | O que faz |
+| Fase | Módulo | Responsabilidade |
 |---|---|---|
-| 0 | `research/` | Engenharia reversa completa do original (42 perfis, DLLs, macros) |
-| 1 | `session.py`, `files.py`, `cli.py` | CardSession T=0 + mapa de EFs + CLI |
-| 2 | `families.py`, `dispatch.py` | Dispatch das 42 famílias: auth e sequências de escrita |
-| 3 | `keyengine.py` | Escrita de chaves (Ki/OPc/ADM/PIN) nos 3 estilos do tool |
-| 4 | `format.py` | Formatação de cartão virgem (2245 CREATE FILE / 14 clusters) |
-| 5 | `tests/` | 41 testes unitários (mock, sem hardware) |
+| 0 | `research/` | Engenharia reversa do original: 42 perfis Check Card, DLLs, macros `Ax()` |
+| 1 | `session.py`, `files.py`, `cli.py` | `CardSession` (PC/SC T=0), mapa de EFs GSM, codecs BCD/Luhn |
+| 2 | `families.py`, `dispatch.py` | Dispatch das 42 famílias: auth + sequências de escrita |
+| 3 | `keyengine.py` | Escrita de chaves nos 3 estilos do tool (file-based, FB-direct, D4-direct) |
+| 4 | `format.py` | Formatação de virgem: 2245 comandos CREATE FILE / 14 clusters |
+| 5 | `tests/` | 41 testes unitários — 100% offline (mocks, sem hardware) |
 
-## Descoberta-chave da RE
-
-O tool original grava as chaves com **UPDATE BINARY puro após SELECT** — sem cifra,
-sem re-auth, sem INS proprietário (`AddWriteMacro @0x4A4DD4`):
-
-```
-> A0A40000020001                                 → 9000
-> A0D6000010<sua_ki_32_hex>      → 9000
+```bash
+python3 -m pytest tests/ -q     # 41 passed
 ```
 
-Autenticação ADM da família principal: `A020000B08 <chave em ASCII-hex>`
-(fábrica: `88888888`). Documentação completa: `research/ax_macros.md`.
+## Descoberta-chave da engenharia reversa
 
-## Quirks macOS/hardware (importante!)
+O tool original grava as chaves com **UPDATE BINARY puro após SELECT** — sem
+cifra, sem re-autenticação, sem INS proprietário (`AddWriteMacro @0x4A4DD4`):
 
-- Conectar **sempre forçando T=0** (`T0|T1` juntos → "card unresponsive")
-- Não rodar `pcscd` do Homebrew junto com o stack nativo Apple (conflito);
+```
+> A020000B08 3838383838383838        ← VERIFY ADM "88888888" (fábrica)
+> A0A40000020001                     ← select do slot da Ki
+> A0D6000010 <Ki em 32 hex>          ← gravação
+```
+
+Documentação completa da RE: [`research/ax_macros.md`](research/ax_macros.md) e
+[`docs/PLANO.md`](docs/PLANO.md).
+
+## Quirks macOS / hardware
+
+- Conecte **sempre forçando T=0** (`T0|T1` juntos → "card unresponsive")
+- Não rode o `pcscd` do Homebrew junto com o stack nativo Apple (conflito);
   se existir: `sudo pkill -x pcscd`
-- SELECT **loud** (P2=00 + GET RESPONSE) antes de operações sensíveis;
-  select silencioso envenena o estado de alguns COS
-- Após `CardConnectionException`, aguardar ≥1s antes de reconectar
+- Use SELECT **loud** (P2=00 + GET RESPONSE) antes de operações sensíveis;
+  select silencioso (P2=0C) envenena o estado de alguns COS
+- Após `CardConnectionException`, aguarde ≥1 s antes de reconectar
 - Firmware GreenCardCOS2014 trava o leitor em vez de retornar SW de erro em
-  certas condições negadas — os retries da `CardSession` contornam isso
+  certas negações — os retries da `CardSession` contornam isso
 
-## Status
+## Aviso legal / ético
 
-- ✅ Leitura/escrita de EFs normais validada em cartão real (ICCID/IMSI/MilPar)
-- ✅ 42 famílias mapeadas; 29 com auth parseada limpa (13 ambíguas documentadas)
-- ⚠️ Escrita de Ki/OPc requer cartão saudável — o cartão de teste teve o canal
-  ADM bloqueado pelo firmware durante o desenvolvimento (ver `~/sim-yatebts.md`)
-- Testes: `python3 -m pytest tests/` → 41 passed
+Ferramenta para pesquisa de segurança e redes privadas de laboratório
+(ex.: YateBTS/NIB). Use apenas com cartões seus. Clonar identidades de
+terceiros é ilegal.
+
+## Licença
+
+Uso educacional/pesquisa. Sem garantia alguma.
