@@ -63,7 +63,7 @@ sem re-auth, sem INS proprietário (`AddWriteMacro @0x4A4DD4`):
 
 ```
 > A0A40000020001                                 → 9000
-> A0D6000010<BEDF17DF...32 bytes hex da Ki>      → 9000
+> A0D6000010<sua_ki_32_hex>      → 9000
 ```
 
 Autenticação ADM da família principal: `A020000B08 <chave em ASCII-hex>`
