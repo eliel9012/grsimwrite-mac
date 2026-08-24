@@ -1,0 +1,18 @@
+# binarios do vendor — NÃO versionar (análise local apenas)
+*.exe
+*.dll
+*.rar
+*.cab
+*.sys
+card_reader_UDisk*/
+GRSIMWrite_4.4.10/
+
+# dados sensíveis de cartão
+*iccid*.bin
+*imsi*.bin
+*ki*.bin
+
+python3/
+.DS_Store
+__pycache__/
+*.pyc
